@@ -7,9 +7,9 @@ process PROCESS_FRAGMENTS {
     tag "${meta.id}"
     label 'process_medium'
 
-    publishDir "${params.outdir}/${meta.id}/chromap_output", mode: params.publish_dir_mode
+    publishDir path: { "${params.outdir}/${meta.id}/chromap_output" }, mode: params.publish_dir_mode
     // Top-level copy of the final fragment file, unless cross-talk correction replaces it.
-    publishDir "${params.outdir}/${meta.id}", mode: params.publish_dir_mode,
+    publishDir path: { "${params.outdir}/${meta.id}" }, mode: params.publish_dir_mode,
         saveAs: { fn -> (!meta.xtalk && fn == 'fragments.tsv.gz') ? fn : null }
 
     input:

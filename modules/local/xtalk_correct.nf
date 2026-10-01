@@ -2,8 +2,8 @@ process XTALK_CORRECT {
     tag "${meta.id}"
     label 'process_high'
 
-    publishDir "${params.outdir}/${meta.id}/chromap_output", mode: params.publish_dir_mode
-    publishDir "${params.outdir}/${meta.id}", mode: params.publish_dir_mode,
+    publishDir path: { "${params.outdir}/${meta.id}/chromap_output" }, mode: params.publish_dir_mode
+    publishDir path: { "${params.outdir}/${meta.id}" }, mode: params.publish_dir_mode,
         saveAs: { fn -> fn == 'fragments.final.tsv.gz' ? fn : null }
 
     input:

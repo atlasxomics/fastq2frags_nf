@@ -2,7 +2,7 @@ process CHROMAP_ALIGN {
     tag "${meta.id}"
     label 'process_high'
 
-    publishDir "${params.outdir}/${meta.id}/chromap_output", mode: params.publish_dir_mode
+    publishDir path: { "${params.outdir}/${meta.id}/chromap_output" }, mode: params.publish_dir_mode
 
     input:
     tuple val(meta), path(r1), path(r2)

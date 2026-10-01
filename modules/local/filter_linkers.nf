@@ -7,7 +7,7 @@ process FILTER_LINKERS {
     tag "${meta.id}"
     label 'process_high'
 
-    publishDir "${params.outdir}/${meta.id}/filtered_fastqs", mode: params.publish_dir_mode
+    publishDir path: { "${params.outdir}/${meta.id}/filtered_fastqs" }, mode: params.publish_dir_mode
 
     input:
     tuple val(meta), path(r1), path(r2)

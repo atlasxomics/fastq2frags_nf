@@ -6,10 +6,10 @@ process FRAGMENT_METRICS {
     tag "${meta.id}"
     label 'process_metrics'
 
-    publishDir "${params.outdir}/${meta.id}", mode: params.publish_dir_mode,
+    publishDir path: { "${params.outdir}/${meta.id}" }, mode: params.publish_dir_mode,
         saveAs: { fn -> fn == 'run_metrics' ? fn : null }
     // Top-level copies of the primary deliverables.
-    publishDir "${params.outdir}/${meta.id}", mode: params.publish_dir_mode,
+    publishDir path: { "${params.outdir}/${meta.id}" }, mode: params.publish_dir_mode,
         saveAs: { fn -> fn.startsWith('top_level/') ? fn.tokenize('/')[-1] : null }
 
     input:
