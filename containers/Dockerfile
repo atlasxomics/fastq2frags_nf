@@ -39,7 +39,16 @@ RUN curl -fsSL "https://sourceforge.net/projects/bbmap/files/BBMap_${BBMAP_VERSI
 ENV PATH="/root/bbmap:${PATH}"
 
 # Chromap, AtlasXomics branch supporting multi-segment barcodes (--read-format bc:..,bc:..)
+# CHROMAP_SORT_BUFFER_GIB sets the fixed buffer Chromap allocates for sorting
+# and deduplicating BED output (upstream: 10 GiB). Lower it only for small test
+# runs on laptops; see "Local testing" in the README.
+ARG CHROMAP_SORT_BUFFER_GIB=10
 RUN git clone --depth 1 -b "${CHROMAP_REF}" https://github.com/haowenz/chromap.git /root/chromap && \
+    if [ "${CHROMAP_SORT_BUFFER_GIB}" != "10" ]; then \
+        grep -q 'max_mem_size = 10 \* ((uint64_t)1 << 30);' /root/chromap/src/mapping_writer.h && \
+        sed -i "s|max_mem_size = 10 \* ((uint64_t)1 << 30);|max_mem_size = ${CHROMAP_SORT_BUFFER_GIB} * ((uint64_t)1 << 30);|" \
+            /root/chromap/src/mapping_writer.h; \
+    fi && \
     make -C /root/chromap && \
     ln -s /root/chromap/chromap /usr/local/bin/chromap
 

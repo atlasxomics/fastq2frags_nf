@@ -5,3 +5,5 @@ work
 results
 scripts/substitute_filter
 .git
+test_data
+test_results

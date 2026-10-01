@@ -82,13 +82,86 @@ Resource requests are set per label in `nextflow.config`:
 | `process_medium` | PROCESS_FRAGMENTS | 8 CPU / 32 GB |
 | `process_single` | SLIMS_UPLOAD | 1 CPU / 2 GB |
 
-On a small machine, add `-profile docker,test` to cap every process at 4 CPU / 12 GB.
+On a small machine, add `-profile docker,test` to cap every process at 4 CPU / 12 GB. For laptop test runs, see [Local testing](#local-testing).
 
 Chromap needs more than 12 GB at any input size. Its sort/dedupe step
 allocates a fixed 10 GiB buffer (`src/mapping_writer.h`) on top of the genome
 index, which is several GB for a full human or mouse genome. Give
 `CHROMAP_ALIGN` at least 16 GB for small references and about 32 GB for full
 genomes.
+
+## Local testing
+
+A small test runs on a laptop, including a 16 GB Apple Silicon Mac with
+Docker Desktop memory set to about 12 GB. It covers the pipeline's code paths,
+not real analysis. The test reference is only hg38 chr21 + chrM, so just
+about 3% of reads align.
+
+1. Build an image with a 1 GiB Chromap sort buffer instead of 10 GiB. On Apple
+   Silicon, keep `--platform linux/amd64`: Chromap needs x86 instructions, so
+   the image runs under emulation and is slower.
+
+   ```bash
+   docker build --platform linux/amd64 \
+       --build-arg CHROMAP_SORT_BUFFER_GIB=1 \
+       -f containers/Dockerfile -t atx-fastq2frags:local .
+   ```
+
+2. Download the test data and build its Chromap index. This takes about 650 MB
+   of disk and downloads about 350 MB.
+
+   ```bash
+   tests/get_test_data.sh test_data
+   ```
+
+3. Run the tests below. The `local` profile caps every process at 4 CPU / 10 GB.
+   With the 1 GiB buffer, Chromap peaks at about 4.7 GB and the other steps
+   stay under 1 GB.
+
+   ```bash
+   # Single sample
+   nextflow run main.nf -profile docker,local --container atx-fastq2frags:local \
+       --run_id demo --r1 test_data/demo_R1.fastq.gz --r2 test_data/demo_R2.fastq.gz \
+       --genome_dir test_data/ref --barcode_file bc50.txt --outdir test_results
+
+   # Samplesheet: two samples, cross-talk correction on the second only
+   nextflow run main.nf -profile docker,local --container atx-fastq2frags:local \
+       --input test_data/samplesheet.csv --xtalk_correction \
+       --genome_dir test_data/ref --barcode_file bc50.txt --outdir test_results
+
+   # Bulk mode, linker 2 filtering skipped, no blacklist filtering
+   nextflow run main.nf -profile docker,local --container atx-fastq2frags:local \
+       --run_id demobulk --r1 test_data/demo_R1.fastq.gz --r2 test_data/demo_R2.fastq.gz \
+       --genome_dir test_data/ref --barcode_file bc50.txt \
+       --bulk --skip_linker2 --blacklist_filtering false --outdir test_results
+   ```
+
+Use the small-buffer image only for tests. Real runs should use the default
+build (10 GiB buffer) on a machine with at least 32 GB of RAM.
+
+### Test data
+
+| Data | Source | Details |
+| --- | --- | --- |
+| `demo_R1.fastq.gz`, `demo_R2.fastq.gz` | First 2,000,000 read pairs of `s3://latch-public/test-data/13502/atx_demo_R{1,2}_001.fastq.gz` (public) | ATX demo run with 50x50 barcodes (`bc50.txt`). Read 2 is 151 bp. |
+| `ref/GRCh38_chr21_chrM.fa` | hg38 `chr21.fa` + `chrM.fa` from AWS iGenomes (`s3://ngi-igenomes/igenomes/Homo_sapiens/UCSC/hg38/`) | 48 MB. The `GRCh38_` prefix makes the pipeline use the GRCh38 chrom sizes, blacklist and annotation. |
+| `ref/GRCh38_chr21_chrM.index` | Built with `chromap -i` | 291 MB. |
+| `xtalkTable.csv` | Generated from the public `x50_all_tissue_positions_list.csv` | Synthetic. Every 10th spot is marked affected (`xtalk_mask` 0, `fold_above_background` 3.5), so 250 of 2,500 barcodes. It only exercises the code path. |
+| Positions list | `x50_all_tissue_positions_list.csv`, which the pipeline downloads | Used for the lane QC plot. |
+
+### Expected results
+
+These are the results from the runs used to validate the pipeline. Counts
+can shift slightly between Chromap builds.
+
+| Test | Checks | Result |
+| --- | --- | --- |
+| Single sample | All steps end to end and the full output layout | 2M pairs → 1,796,345 pass linker 1 → 1,764,259 pass linker 2. Chromap: 105,204 mapped reads, 96.4% valid barcodes. 31,037 raw fragments → about 29,180 after out-of-bound and blacklist filtering, across 2,395 barcodes. About 12,350 peaks, TSS enrichment 8.39. Calibrated FRiP is `NA` because the data is too shallow (`low_frac_pass;low_median_nfrag`). |
+| Samplesheet + `--xtalk_correction` | Per-sample branching; cross-talk correction with the compiled C engine | `demo` logs a warning and skips correction (no table). `demoxt`: 250 affected barcodes substituted (200 by row+1, 50 by row-1). `fragments.final.tsv.gz` is published at the top level. |
+| `--bulk --skip_linker2 --blacklist_filtering false`, as UID 1000 | Bulk barcodes, linker skip, no blacklist, non-root container user | Random barcodes written into read 2, empty linker 2 stats file, all outputs present. |
+
+Not tested: `--cleaning` (no table with `finalDownFract` was available),
+`--no_ligation_bulk`, `--upload_to_slims`, and full-genome references.
 
 ## Parameters
 
@@ -176,6 +249,7 @@ nextflow run main.nf ... --upload_to_slims
 | `scripts/` | Analysis scripts: cleaning, bulk barcodes, cross-talk substitution, SnapATAC2 metrics and the report. |
 | `barcodes/`, `blacklist/`, `chrom_sizes/`, `references/` | Reference assets, staged or baked into the image. |
 | `containers/Dockerfile` | Image for all processes. |
+| `tests/get_test_data.sh` | Downloads the local test dataset (see Local testing). |
 
 ## Differences from the Latch workflow
 
