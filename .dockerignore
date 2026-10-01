@@ -1,0 +1,7 @@
+**/__pycache__
+work
+.nextflow
+.nextflow.log*
+results
+scripts/substitute_filter
+.git

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.nextflow/
+.nextflow.log*
+work/
+results/
+# Never ship a host-compiled xtalk binary; the image builds it
+scripts/substitute_filter
