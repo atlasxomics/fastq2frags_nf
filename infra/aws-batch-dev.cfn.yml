@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Dev/test AWS Batch environment for fastq2frags_nf: an S3 bucket for work dirs,
+  test data and results; a small EC2 Batch compute environment and job queue for
+  runs launched from a laptop; and, optionally, an IAM role that Seqera Platform
+  Cloud assumes to build its own Batch Forge environment. Not a production setup.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the Batch instances.
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      Subnets for the Batch instances. They need outbound internet access (ECR,
+      the public test files): use public subnets that assign public IPs, or
+      private subnets behind a NAT gateway.
+  MaxvCpus:
+    Type: Number
+    Default: 64
+    Description: Upper bound on vCPUs the compute environment can run at once (cost cap).
+  RootVolumeGiB:
+    Type: Number
+    Default: 200
+    Description: Root EBS size for Batch instances. Docker images and task scratch live here.
+  WorkRetentionDays:
+    Type: Number
+    Default: 14
+    Description: Days to keep objects under work/ (Nextflow intermediate files).
+  SeqeraExternalId:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      External ID that Seqera generates when you save role-based AWS credentials.
+      Leave empty to skip creating the Seqera role.
+
+Conditions:
+  CreateSeqeraRole: !Not [!Equals [!Ref SeqeraExternalId, ""]]
+
+Resources:
+  # ------------------------------------------------------------------ storage
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "atx-fastq2frags-dev-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-work
+            Status: Enabled
+            Prefix: work/
+            ExpirationInDays: !Ref WorkRetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # ------------------------------------------------------------------ network
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: fastq2frags Batch instances (outbound only)
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  # ------------------------------------------------------------------ instances
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: atx-fastq2frags-batch-instance
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        # Lets you open a shell on an instance with Session Manager when debugging.
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: bucket-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+                Resource: !Sub "${Bucket.Arn}/*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: atx-fastq2frags-batch-instance
+      Roles: [!Ref InstanceRole]
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: atx-fastq2frags-batch
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          # Root device of the ECS-optimized Amazon Linux 2023 AMI.
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref RootVolumeGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        MetadataOptions:
+          HttpTokens: required
+          # 2 hops so containers can reach instance metadata for credentials.
+          HttpPutResponseHopLimit: 2
+
+  # ------------------------------------------------------------------ batch
+  ComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: atx-fastq2frags-dev
+      Type: MANAGED
+      State: ENABLED
+      # No ServiceRole: Batch uses its service-linked role.
+      ComputeResources:
+        Type: EC2
+        AllocationStrategy: BEST_FIT_PROGRESSIVE
+        MinvCpus: 0
+        DesiredvCpus: 0
+        MaxvCpus: !Ref MaxvCpus
+        # x86 only: Chromap needs x86 instructions.
+        InstanceTypes: [m6i, r6i, c6i]
+        Subnets: !Ref SubnetIds
+        SecurityGroupIds: [!Ref BatchSecurityGroup]
+        InstanceRole: !GetAtt InstanceProfile.Arn
+        LaunchTemplate:
+          LaunchTemplateId: !Ref LaunchTemplate
+          Version: !GetAtt LaunchTemplate.LatestVersionNumber
+        Ec2Configuration:
+          - ImageType: ECS_AL2023
+        Tags:
+          Name: atx-fastq2frags-batch
+          project: fastq2frags
+      Tags:
+        project: fastq2frags
+
+  JobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: atx-fastq2frags-dev
+      State: ENABLED
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref ComputeEnvironment
+
+  # ------------------------------------------------------------------ seqera
+  # Role-based credentials for Seqera Platform Cloud. Based on Seqera's
+  # aws-batch-full-policy.json, trimmed to Batch Forge (TowerForge-* resources),
+  # this stack's bucket, and Seqera-managed secrets. EFS, FSx and lineage
+  # permissions are left out.
+  SeqeraRole:
+    Type: AWS::IAM::Role
+    Condition: CreateSeqeraRole
+    Properties:
+      RoleName: atx-fastq2frags-seqera
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
+            Action: [sts:AssumeRole, sts:TagSession]
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref SeqeraExternalId
+      Policies:
+        - PolicyName: seqera-batch-forge
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BatchEnvironmentManagement
+                Effect: Allow
+                Action:
+                  - batch:CreateComputeEnvironment
+                  - batch:CreateJobQueue
+                  - batch:DeleteComputeEnvironment
+                  - batch:DeleteJobQueue
+                  - batch:TagResource
+                  - batch:UpdateComputeEnvironment
+                  - batch:UpdateJobQueue
+                Resource:
+                  - arn:aws:batch:*:*:compute-environment/TowerForge-*
+                  - arn:aws:batch:*:*:job-queue/TowerForge-*
+              - Sid: BatchListing
+                Effect: Allow
+                Action:
+                  - batch:DescribeComputeEnvironments
+                  - batch:DescribeJobDefinitions
+                  - batch:DescribeJobQueues
+                  - batch:DescribeJobs
+                Resource: "*"
+              - Sid: BatchJobs
+                Effect: Allow
+                Action:
+                  - batch:CancelJob
+                  - batch:RegisterJobDefinition
+                  - batch:SubmitJob
+                  - batch:TagResource
+                  - batch:TerminateJob
+                Resource:
+                  - arn:aws:batch:*:*:job-definition/*
+                  - arn:aws:batch:*:*:job-queue/TowerForge-*
+                  - arn:aws:batch:*:*:job/*
+              - Sid: LaunchTemplates
+                Effect: Allow
+                Action:
+                  - ec2:CreateLaunchTemplate
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                Resource: "*"
+              - Sid: PassRolesToBatch
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: arn:aws:iam::*:role/TowerForge-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: [batch.amazonaws.com, ec2.amazonaws.com]
+              - Sid: ForgeIamRoles
+                Effect: Allow
+                Action:
+                  - iam:AddRoleToInstanceProfile
+                  - iam:AttachRolePolicy
+                  - iam:CreateInstanceProfile
+                  - iam:CreateRole
+                  - iam:DeleteInstanceProfile
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRolePolicies
+                  - iam:PutRolePolicy
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:TagRole
+                Resource:
+                  - arn:aws:iam::*:role/TowerForge-*
+                  - arn:aws:iam::*:instance-profile/TowerForge-*
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:Describe*
+                  - logs:FilterLogEvents
+                  - logs:Get*
+                  - logs:List*
+                  - logs:StartQuery
+                  - logs:StopQuery
+                  - logs:TestMetricFilter
+                Resource: "*"
+              - Sid: BucketListing
+                Effect: Allow
+                Action: [s3:ListAllMyBuckets, s3:GetBucketLocation]
+                Resource: "*"
+              - Sid: BucketData
+                Effect: Allow
+                Action: [s3:Get*, s3:List*, s3:PutObject]
+                Resource:
+                  - !GetAtt Bucket.Arn
+                  - !Sub "${Bucket.Arn}/*"
+              - Sid: Ec2Metadata
+                Effect: Allow
+                Action:
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstanceTypeOfferings
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:GetConsoleOutput
+                Resource: "*"
+              - Sid: EcsOptimizedAmi
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource: arn:aws:ssm:*:*:parameter/aws/service/ecs/*
+              - Sid: SecretsListing
+                Effect: Allow
+                Action: secretsmanager:ListSecrets
+                Resource: "*"
+              - Sid: SeqeraSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:CreateSecret
+                Resource: arn:aws:secretsmanager:*:*:secret:tower-*
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+  WorkDir:
+    Description: Pass to nextflow run with -w.
+    Value: !Sub "s3://${Bucket}/work"
+  JobQueue:
+    Value: !Ref JobQueue
+  InstanceRoleArn:
+    Value: !GetAtt InstanceRole.Arn
+  SeqeraRoleArn:
+    Condition: CreateSeqeraRole
+    Description: Paste into the Seqera credential's "Assume role" field.
+    Value: !GetAtt SeqeraRole.Arn

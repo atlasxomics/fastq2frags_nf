@@ -26,8 +26,16 @@ RUN apt-get update -y && \
         python3-dev \
         python3-pip \
         python-is-python3 \
-        tabix && \
+        tabix \
+        unzip && \
     rm -rf /var/lib/apt/lists/*
+
+# AWS CLI v2. Nextflow's AWS Batch executor uses it inside the task container
+# to stage files to and from S3 (not needed when running with Fusion).
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
+    /tmp/aws/install && \
+    rm -rf /tmp/aws /tmp/awscliv2.zip
 
 WORKDIR /root
 

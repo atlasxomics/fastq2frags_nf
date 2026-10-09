@@ -38,6 +38,35 @@ The pipeline uses `atx-fastq2frags:<version>` by default. After pushing the
 image to a registry, point the pipeline at it with
 `--container <registry>/atx-fastq2frags:<version>`.
 
+### Published images (ECR)
+
+The "Publish container" GitHub Actions workflow
+(`.github/workflows/publish-container.yml`) builds the image on GitHub's x86
+runners and pushes it to Amazon ECR. Pushing a tag that matches the `version`
+file publishes two images:
+
+| Tag | Image |
+|---|---|
+| `<version>` | Release image, for real runs. |
+| `<version>-local` | Chromap sort buffer cut to 1 GiB, for local tests only. |
+
+```bash
+git tag "v$(cat version)"
+git push origin "v$(cat version)"
+```
+
+Running the workflow by hand from the Actions tab publishes
+`<version>-<short sha>` and `<version>-<short sha>-local` instead, so release
+tags are never overwritten. One-time AWS setup is in `.github/aws/README.md`.
+
+To pull from ECR:
+
+```bash
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+docker pull <account>.dkr.ecr.us-east-1.amazonaws.com/atx-fastq2frags:<version>
+```
+
 ## Run
 
 Single sample:

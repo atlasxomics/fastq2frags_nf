@@ -1,0 +1,97 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:DescribeStacks",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:GetTemplate"
+      ],
+      "Resource": "arn:aws:cloudformation:us-east-1:*:stack/fastq2frags-ecr-publish/*"
+    },
+    {
+      "Sid": "CloudFormationTemplates",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ValidateTemplate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PublishRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::*:role/atx-fastq2frags-github-publish"
+    },
+    {
+      "Sid": "GitHubOIDCProvider",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:TagOpenIDConnectProvider"
+      ],
+      "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
+    },
+    {
+      "Sid": "ListOIDCProviders",
+      "Effect": "Allow",
+      "Action": "iam:ListOpenIDConnectProviders",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrRepository",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:ListTagsForResource",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:PutImageTagMutability",
+        "ecr:TagResource",
+        "ecr:UntagResource"
+      ],
+      "Resource": "arn:aws:ecr:us-east-1:*:repository/atx-fastq2frags"
+    },
+    {
+      "Sid": "EcrPullLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrPull",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:DescribeImages",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:ListImages"
+      ],
+      "Resource": "arn:aws:ecr:us-east-1:*:repository/atx-fastq2frags"
+    }
+  ]
+}

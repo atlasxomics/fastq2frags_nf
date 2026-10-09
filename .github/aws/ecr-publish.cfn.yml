@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  ECR repository and GitHub OIDC role for the fastq2frags_nf "Publish container"
+  workflow (.github/workflows/publish-container.yml).
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: atlasxomics/fastq2frags_nf
+    Description: owner/name of the GitHub repository allowed to push.
+  RepositoryName:
+    Type: String
+    Default: atx-fastq2frags
+    Description: ECR repository name (must match the ECR_REPOSITORY variable, if set).
+  CreateOIDCProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: >
+      An account can hold only one token.actions.githubusercontent.com provider.
+      Set to "false" if it already exists.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      # Published versions can't be overwritten.
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  PublishRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${RepositoryName}-github-publish"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:*"
+      Policies:
+        - PolicyName: ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt Repository.Arn
+
+Outputs:
+  RoleArn:
+    Description: Set as the AWS_ROLE_ARN repository variable in GitHub.
+    Value: !GetAtt PublishRole.Arn
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri

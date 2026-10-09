@@ -1,0 +1,92 @@
+# Builds containers/Dockerfile and pushes it to Amazon ECR.
+#
+# - Pushing a tag vX.Y.Z publishes <ecr>/<repo>:X.Y.Z (the release image) and
+#   <ecr>/<repo>:X.Y.Z-local (Chromap sort buffer cut to 1 GiB, for laptop
+#   tests). The tag must match the version file.
+# - Running it by hand (Actions tab -> Run workflow) publishes
+#   X.Y.Z-<short sha> and X.Y.Z-<short sha>-local, so release tags are never
+#   overwritten.
+#
+# One-time AWS setup: see .github/aws/README.md. The workflow reads these
+# repository variables (Settings -> Secrets and variables -> Actions -> Variables):
+#   AWS_ROLE_ARN    (required) IAM role this workflow assumes via GitHub OIDC
+#   AWS_REGION      (optional) defaults to us-east-1
+#   ECR_REPOSITORY  (optional) defaults to atx-fastq2frags
+name: Publish container
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'atx-fastq2frags' }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: release
+            suffix: ""
+            sort_buffer_gib: 10
+          - variant: local
+            suffix: "-local"
+            sort_buffer_gib: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          version="$(tr -d '[:space:]' < version)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+              echo "::error::Git tag ${GITHUB_REF_NAME} does not match version file (v${version})"
+              exit 1
+            fi
+            tag="${version}"
+          else
+            tag="${version}-${GITHUB_SHA::7}"
+          fi
+          echo "tag=${tag}${{ matrix.suffix }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/Dockerfile
+          platforms: linux/amd64
+          build-args: CHROMAP_SORT_BUFFER_GIB=${{ matrix.sort_buffer_gib }}
+          push: true
+          # Single-platform manifest; provenance attestations show up in ECR as
+          # extra "unknown/unknown" images.
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+      - name: Summary
+        run: |
+          image="${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}"
+          echo "Pushed \`${image}\`" >> "$GITHUB_STEP_SUMMARY"

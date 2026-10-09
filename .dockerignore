@@ -7,3 +7,5 @@ scripts/substitute_filter
 .git
 test_data
 test_results
+**/test_data
+scratch
