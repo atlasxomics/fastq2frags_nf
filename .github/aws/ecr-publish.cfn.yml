@@ -8,6 +8,14 @@ Parameters:
     Type: String
     Default: atlasxomics/fastq2frags_nf
     Description: owner/name of the GitHub repository allowed to push.
+  GitHubImmutableSubject:
+    Type: String
+    Default: atlasxomics@75449635/fastq2frags_nf@1400454730
+    Description: >
+      owner@owner_id/name@repo_id form of the repository, used in the OIDC sub
+      claim when the repo has GitHub's immutable subject setting on. Get it with
+      `gh api repos/<owner>/<name>/actions/oidc/customization/sub`
+      (sub_claim_prefix, without the leading "repo:").
   RepositoryName:
     Type: String
     Default: atx-fastq2frags
@@ -55,7 +63,9 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:*"
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${GitHubRepo}:*"
+                  - !Sub "repo:${GitHubImmutableSubject}:*"
       Policies:
         - PolicyName: ecr-push
           PolicyDocument:
