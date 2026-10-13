@@ -180,16 +180,23 @@ Resources:
     Condition: CreateSeqeraRole
     Properties:
       RoleName: atx-fastq2frags-seqera
+      # Same layout as the trust policy Seqera shows for role-based credentials.
+      # TagSession has no condition, but a session still needs AssumeRole and
+      # so the External ID.
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
-            Action: [sts:AssumeRole, sts:TagSession]
+            Action: sts:AssumeRole
             Condition:
               StringEquals:
                 sts:ExternalId: !Ref SeqeraExternalId
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
+            Action: sts:TagSession
       Policies:
         - PolicyName: seqera-batch-forge
           PolicyDocument:
@@ -242,7 +249,8 @@ Resources:
                 Resource: arn:aws:iam::*:role/TowerForge-*
                 Condition:
                   StringEquals:
-                    iam:PassedToService: [batch.amazonaws.com, ec2.amazonaws.com]
+                    # ecs-tasks: Forge can run the head job on Fargate.
+                    iam:PassedToService: [batch.amazonaws.com, ec2.amazonaws.com, ecs-tasks.amazonaws.com]
               - Sid: ForgeIamRoles
                 Effect: Allow
                 Action:
