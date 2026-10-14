@@ -220,6 +220,9 @@ If you turn on cleaning or cross-talk correction without a `ds_table`, the
 pipeline logs a warning and skips that step. A `ds_table` that is missing
 required columns stops the run.
 
+`nextflow_schema.json` describes these parameters for Seqera Platform's launch
+form. When you add or change a parameter, update it there too.
+
 ### SLIMS credentials
 
 ```bash

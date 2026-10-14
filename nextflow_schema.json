@@ -1,0 +1,235 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "$id": "https://raw.githubusercontent.com/atlasxomics/fastq2frags_nf/main/nextflow_schema.json",
+    "title": "atlasxomics/fastq2frags_nf pipeline parameters",
+    "description": "AtlasXomics epigenomic preprocessing (fastq2frags) for DBiT-seq",
+    "type": "object",
+    "definitions": {
+        "input_output_options": {
+            "title": "Input/output options",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "Samples to process and where to write the results.",
+            "required": ["outdir"],
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "format": "file-path",
+                    "mimetype": "text/csv",
+                    "pattern": "^\\S+\\.csv$",
+                    "description": "Samplesheet CSV with columns run_id,r1,r2[,ng_id][,ds_table].",
+                    "help_text": "One row per sample. r1 and r2 are the read 1 and read 2 FASTQs. ng_id (SLIMS content ID) and ds_table (correction table) are optional per-sample columns. Leave empty to use the single-sample options instead.",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "outdir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "default": "results",
+                    "description": "Output root. Use an s3:// path when running on AWS Batch.",
+                    "help_text": "Each sample is written to <outdir>/<run_id>/. Nextflow reports go to <outdir>/pipeline_info/.",
+                    "fa_icon": "fas fa-folder-open"
+                }
+            }
+        },
+        "single_sample_input": {
+            "title": "Single-sample input",
+            "type": "object",
+            "fa_icon": "fas fa-vial",
+            "description": "Used only when no samplesheet is given.",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "pattern": "^[^/\\-. ]+$",
+                    "description": "Run ID. Cannot contain '/', '-', '.' or a space.",
+                    "fa_icon": "fas fa-tag"
+                },
+                "r1": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Read 1 FASTQ.",
+                    "fa_icon": "fas fa-file"
+                },
+                "r2": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Read 2 FASTQ.",
+                    "fa_icon": "fas fa-file"
+                }
+            }
+        },
+        "reference_options": {
+            "title": "Reference",
+            "type": "object",
+            "fa_icon": "fas fa-dna",
+            "description": "Genome and barcode set.",
+            "required": ["genome_dir"],
+            "properties": {
+                "genome_dir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "Directory containing the Chromap *.fa and *.index.",
+                    "fa_icon": "fas fa-folder"
+                },
+                "genome_id": {
+                    "type": "string",
+                    "enum": ["GRCh38", "GRCm38", "GRCm39", "Rnor6", "mm10", "mm39"],
+                    "description": "Genome ID. Leave empty to infer it from the *.fa file name.",
+                    "fa_icon": "fas fa-book"
+                },
+                "barcode_file": {
+                    "type": "string",
+                    "default": "bc220_25-APR.txt",
+                    "description": "Barcode whitelist: a file name in barcodes/, or a path.",
+                    "help_text": "Bundled files: bc50.txt, bc50_old.txt, bc96.txt, bc96_fg.txt, bc220_05-OCT.txt, bc220_25-APR.txt, bc220-18-SEP.txt, bc220-20-MAY.txt.",
+                    "fa_icon": "fas fa-barcode"
+                },
+                "positions_file": {
+                    "type": "string",
+                    "description": "Spatial positions list for lane QC. Needed only with custom barcode files.",
+                    "help_text": "Defaults to the positions list matching the barcode file.",
+                    "fa_icon": "fas fa-th"
+                }
+            }
+        },
+        "read_filtering_options": {
+            "title": "Read filtering",
+            "type": "object",
+            "fa_icon": "fas fa-filter",
+            "description": "Linker filtering with bbduk.",
+            "properties": {
+                "skip_linker1": {
+                    "type": "boolean",
+                    "description": "Skip linker 1 filtering.",
+                    "fa_icon": "fas fa-forward"
+                },
+                "skip_linker2": {
+                    "type": "boolean",
+                    "description": "Skip linker 2 filtering.",
+                    "fa_icon": "fas fa-forward"
+                },
+                "bulk": {
+                    "type": "boolean",
+                    "description": "Assign random barcodes, for bulk runs.",
+                    "fa_icon": "fas fa-random"
+                },
+                "no_ligation_bulk": {
+                    "type": "boolean",
+                    "description": "Assign random barcodes, for no-ligation bulk runs.",
+                    "fa_icon": "fas fa-random"
+                }
+            }
+        },
+        "fragment_processing_options": {
+            "title": "Fragment processing",
+            "type": "object",
+            "fa_icon": "fas fa-cut",
+            "description": "Blacklist filtering, cleaning and cross-talk correction.",
+            "properties": {
+                "blacklist_filtering": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Remove fragments that overlap ENCODE blacklist regions.",
+                    "fa_icon": "fas fa-ban"
+                },
+                "ds_table": {
+                    "type": "string",
+                    "format": "file-path",
+                    "description": "Correction table for cleaning and cross-talk correction.",
+                    "help_text": "Samplesheet rows can set their own ds_table instead. If cleaning or cross-talk correction is on without a ds_table, the step is skipped with a warning.",
+                    "fa_icon": "fas fa-table"
+                },
+                "cleaning": {
+                    "type": "boolean",
+                    "description": "Clean FASTQs against ds_table. Needs columns mer and finalDownFract.",
+                    "fa_icon": "fas fa-broom"
+                },
+                "xtalk_correction": {
+                    "type": "boolean",
+                    "description": "Cross-talk correction. Needs columns mer, row, col, xtalk_mask and fold_above_background.",
+                    "fa_icon": "fas fa-exchange-alt"
+                },
+                "xtalk_threshold": {
+                    "type": "number",
+                    "default": 2.0,
+                    "minimum": 0,
+                    "description": "Minimum fold_above_background for a barcode to be substituted.",
+                    "fa_icon": "fas fa-sliders-h"
+                }
+            }
+        },
+        "metrics_options": {
+            "title": "Metrics",
+            "type": "object",
+            "fa_icon": "fas fa-chart-bar",
+            "description": "Fragment floors for metrics, peaks and the bigwig.",
+            "properties": {
+                "min_fragments": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 1,
+                    "description": "Fragment floor for FRiP and per-cell metrics.",
+                    "fa_icon": "fas fa-sort-numeric-up"
+                },
+                "input_fragment_floor": {
+                    "type": "integer",
+                    "default": 1,
+                    "minimum": 1,
+                    "description": "Fragment floor for peak calling and the bigwig.",
+                    "fa_icon": "fas fa-sort-numeric-up"
+                }
+            }
+        },
+        "slims_options": {
+            "title": "SLIMS",
+            "type": "object",
+            "fa_icon": "fas fa-upload",
+            "description": "Push summary.csv metrics to SLIMS. Credentials come from the SLIMS_USERNAME and SLIMS_PASSWORD secrets.",
+            "properties": {
+                "upload_to_slims": {
+                    "type": "boolean",
+                    "description": "Push summary.csv metrics to SLIMS.",
+                    "fa_icon": "fas fa-cloud-upload-alt"
+                },
+                "ng_id": {
+                    "type": "string",
+                    "default": "NG00000",
+                    "pattern": "^NG\\d{5}$",
+                    "description": "SLIMS content ID. When unset, it is taken from the _NGxxxxx suffix of run_id.",
+                    "fa_icon": "fas fa-hashtag"
+                }
+            }
+        },
+        "infrastructure_options": {
+            "title": "Infrastructure",
+            "type": "object",
+            "fa_icon": "fas fa-server",
+            "description": "Container image and publishing.",
+            "properties": {
+                "container": {
+                    "type": "string",
+                    "description": "Container image for all processes. Defaults to atx-fastq2frags:<version>.",
+                    "help_text": "On AWS Batch, use the ECR image, e.g. 877829285799.dkr.ecr.us-east-1.amazonaws.com/atx-fastq2frags:0.0.1. Use the -local tag with the test profile.",
+                    "fa_icon": "fab fa-docker"
+                },
+                "publish_dir_mode": {
+                    "type": "string",
+                    "default": "copy",
+                    "enum": ["symlink", "rellink", "link", "copy", "copyNoFollow", "move"],
+                    "description": "How results are published to outdir.",
+                    "fa_icon": "fas fa-copy",
+                    "hidden": true
+                }
+            }
+        }
+    },
+    "allOf": [
+        { "$ref": "#/definitions/input_output_options" },
+        { "$ref": "#/definitions/single_sample_input" },
+        { "$ref": "#/definitions/reference_options" },
+        { "$ref": "#/definitions/read_filtering_options" },
+        { "$ref": "#/definitions/fragment_processing_options" },
+        { "$ref": "#/definitions/metrics_options" },
+        { "$ref": "#/definitions/slims_options" },
+        { "$ref": "#/definitions/infrastructure_options" }
+    ]
+}
