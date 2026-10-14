@@ -21,7 +21,9 @@ process FILTER_LINKERS {
     def prefix = meta.id
     // Leave headroom for the JVM on top of the heap.
     def xmx = "-Xmx${Math.max(1, (task.memory.toGiga() * 0.85) as int)}g"
-    def bbduk_common = "skipr1=t threads=${task.cpus} ${xmx} k=30 mm=f rcomp=f hdist=3"
+    // ordered=t keeps input read order. With several threads bbduk otherwise
+    // writes reads in a varying order, and Chromap's output depends on it.
+    def bbduk_common = "skipr1=t threads=${task.cpus} ordered=t ${xmx} k=30 mm=f rcomp=f hdist=3"
     // Bulk modes write the barcode-replaced read 2 under the published R2 name.
     def l2_r2 = (params.bulk || params.no_ligation_bulk) ? "linker2_R2.prebulk.fastq.gz" : "${prefix}_linker2_R2.fastq.gz"
     def bulk_flags = [params.bulk ? '-b' : '', params.no_ligation_bulk ? '-nl' : ''].join(' ').trim()
