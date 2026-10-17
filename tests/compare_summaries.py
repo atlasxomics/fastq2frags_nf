@@ -78,6 +78,9 @@ ABSOLUTE = {
 }
 # A fraction of barcodes: allow --barcodes barcodes' worth of change.
 BARCODE_FRACTION = ["Fraction Barcodes >= Calc Floor"]
+# File paths: compared by file name, since Latch records barcodes/bc50.txt
+# where Nextflow records bc50.txt.
+BASENAME = ["Cell Barcode Whitelist File"]
 # Yes/no and flags derived from values near cut-offs: may flip.
 REVIEW_IF_DIFFERENT = ["FRiP Calibration Reliable", "FRiP Reliability Flags"]
 IGNORE = [
@@ -145,6 +148,8 @@ def check(col, a, b, a_row, b_row, args):
         return "REVIEW", "column missing in one file", None
     if a == b:
         return "PASS", "identical", None
+    if col in BASENAME and a.rsplit("/", 1)[-1] == b.rsplit("/", 1)[-1]:
+        return "PASS", "same file name", None
     if col in EXACT:
         return "FAIL", "must match exactly", None
     if col in REVIEW_IF_DIFFERENT:

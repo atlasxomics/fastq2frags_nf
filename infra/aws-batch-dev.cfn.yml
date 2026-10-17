@@ -26,7 +26,14 @@ Parameters:
   WorkRetentionDays:
     Type: Number
     Default: 14
-    Description: Days to keep objects under work/ (Nextflow intermediate files).
+    Description: Days to keep objects under work/ and scratch/ (Nextflow intermediate files).
+  InputBucket:
+    Type: String
+    Default: ""
+    Description: >
+      Optional bucket in another account to read inputs from (e.g. atx-illumina).
+      Grants read-only access on this side; the bucket's own policy must also
+      allow it. Leave empty for none.
   SeqeraExternalId:
     Type: String
     Default: ""
@@ -37,6 +44,7 @@ Parameters:
 
 Conditions:
   CreateSeqeraRole: !Not [!Equals [!Ref SeqeraExternalId, ""]]
+  HasInputBucket: !Not [!Equals [!Ref InputBucket, ""]]
 
 Resources:
   # ------------------------------------------------------------------ storage
@@ -63,6 +71,12 @@ Resources:
           - Id: expire-work
             Status: Enabled
             Prefix: work/
+            ExpirationInDays: !Ref WorkRetentionDays
+          # Seqera runs write to <work dir>/scratch/<run id> when the compute
+          # environment's work directory is the bucket root.
+          - Id: expire-seqera-scratch
+            Status: Enabled
+            Prefix: scratch/
             ExpirationInDays: !Ref WorkRetentionDays
           - Id: abort-incomplete-uploads
             Status: Enabled
@@ -105,6 +119,15 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
                 Resource: !Sub "${Bucket.Arn}/*"
+              - !If
+                - HasInputBucket
+                - Sid: InputBucketRead
+                  Effect: Allow
+                  Action: [s3:ListBucket, s3:GetBucketLocation, s3:GetObject]
+                  Resource:
+                    - !Sub "arn:aws:s3:::${InputBucket}"
+                    - !Sub "arn:aws:s3:::${InputBucket}/*"
+                - !Ref AWS::NoValue
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -293,6 +316,16 @@ Resources:
                 Resource:
                   - !GetAtt Bucket.Arn
                   - !Sub "${Bucket.Arn}/*"
+              # Read-only, so Data Explorer can browse the input bucket.
+              - !If
+                - HasInputBucket
+                - Sid: InputBucketRead
+                  Effect: Allow
+                  Action: [s3:ListBucket, s3:GetBucketLocation, s3:GetObject]
+                  Resource:
+                    - !Sub "arn:aws:s3:::${InputBucket}"
+                    - !Sub "arn:aws:s3:::${InputBucket}/*"
+                - !Ref AWS::NoValue
               - Sid: Ec2Metadata
                 Effect: Allow
                 Action:
