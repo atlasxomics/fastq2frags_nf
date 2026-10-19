@@ -28,13 +28,29 @@ process FILTER_LINKERS {
     def l2_r2 = (params.bulk || params.no_ligation_bulk) ? "linker2_R2.prebulk.fastq.gz" : "${prefix}_linker2_R2.fastq.gz"
     def bulk_flags = [params.bulk ? '-b' : '', params.no_ligation_bulk ? '-nl' : ''].join(' ').trim()
     """
+    # If one of bbduk's threads fails (e.g. a writer when the disk fills),
+    # bbduk doesn't exit: its main thread waits for that thread forever. Pass
+    # its output through to stderr and kill it at the first Java exception,
+    # so the task fails instead of hanging.
+    run_bbduk() {
+        bbduk.sh "\$@" 2>&1 | while IFS= read -r line; do
+            printf '%s\\n' "\$line" >&2
+            case "\$line" in
+                "Exception in thread"*)
+                    echo "bbduk: a thread failed, stopping bbduk" >&2
+                    pkill -f jgi.BBDuk || true ;;
+            esac
+        done
+        return "\${PIPESTATUS[0]}"
+    }
+
     if [ "${params.skip_linker1}" = "true" ]; then
         echo "linker1 filtering skipped"
         ln -s ${r1} linker1_R1.fastq.gz
         ln -s ${r2} linker1_R2.fastq.gz
         touch ${prefix}_l1_stats.txt
     else
-        bbduk.sh \\
+        run_bbduk \\
             in1=${r1} in2=${r2} \\
             outm1=linker1_R1.fastq.gz outm2=linker1_R2.fastq.gz \\
             ${bbduk_common} restrictleft=103 \\
@@ -48,7 +64,7 @@ process FILTER_LINKERS {
         cp -L linker1_R2.fastq.gz ${l2_r2}
         touch ${prefix}_l2_stats.txt
     else
-        bbduk.sh \\
+        run_bbduk \\
             in1=linker1_R1.fastq.gz in2=linker1_R2.fastq.gz \\
             outm1=${prefix}_linker2_R1.fastq.gz outm2=${l2_r2} \\
             ${bbduk_common} restrictleft=65 \\
