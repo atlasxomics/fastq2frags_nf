@@ -355,6 +355,34 @@ Resources:
                   - secretsmanager:CreateSecret
                 Resource: arn:aws:secretsmanager:*:*:secret:tower-*
 
+  # Wave (needed for Fusion) pulls private ECR images only with an IAM user's
+  # access keys, not a role. This user can only pull the pipeline image. Create
+  # its access key in the console and store it as Seqera ECR credentials.
+  WaveEcrUser:
+    Type: AWS::IAM::User
+    Condition: CreateSeqeraRole
+    Properties:
+      UserName: atx-fastq2frags-wave-ecr
+      Policies:
+        - PolicyName: pull-pipeline-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:ListImages
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/atx-fastq2frags"
+
 Outputs:
   BucketName:
     Value: !Ref Bucket
@@ -369,3 +397,7 @@ Outputs:
     Condition: CreateSeqeraRole
     Description: Paste into the Seqera credential's "Assume role" field.
     Value: !GetAtt SeqeraRole.Arn
+  WaveEcrUserName:
+    Condition: CreateSeqeraRole
+    Description: Create an access key for this user for Seqera's ECR credentials.
+    Value: !Ref WaveEcrUser
