@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Delivery bucket for fastq2frags results shared with customers through Seqera
+  Data Explorer. Each customer has a prefix, <customer>/, read through its own
+  role (delivery-customer.cfn.yml). Pipeline runs in the internal Seqera
+  workspace publish results into it. Dev/test only.
+
+Parameters:
+  RetentionDays:
+    Type: Number
+    Default: 30
+    Description: Days to keep delivered results before they are deleted.
+  WriterRolePattern:
+    Type: String
+    Default: arn:aws:iam::*:role/TowerForge-*
+    Description: >
+      ARN pattern of the roles allowed to publish results (the Batch Forge
+      instance roles of the internal workspace). Narrow it to the internal
+      compute environment's role once it exists.
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "atx-fastq2frags-deliveries-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-deliveries
+            Status: Enabled
+            ExpirationInDays: !Ref RetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      # Data Explorer downloads several files at once from the browser, which
+      # needs CORS. Read-only, so no PUT.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["https://cloud.seqera.io"]
+            AllowedMethods: [GET, HEAD]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [ETag]
+            MaxAge: 3000
+
+  # A bucket policy that names a role grants it access without any identity
+  # policy, so Forge's instance roles can publish here unchanged. Naming the
+  # account root would only defer to IAM, and Principal can't hold wildcards,
+  # hence "*" limited by account and role ARN pattern. The fixed
+  # aws:PrincipalAccount also keeps S3 from treating the policy as public.
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub "${Bucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: PipelineList
+            Effect: Allow
+            Principal: "*"
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !GetAtt Bucket.Arn
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:PrincipalArn: !Ref WriterRolePattern
+          - Sid: PipelinePublish
+            Effect: Allow
+            Principal: "*"
+            Action: [s3:GetObject, s3:PutObject, s3:AbortMultipartUpload]
+            Resource: !Sub "${Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:PrincipalArn: !Ref WriterRolePattern
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+    Export:
+      Name: atx-fastq2frags-deliveries-bucket

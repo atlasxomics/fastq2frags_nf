@@ -35,15 +35,16 @@ Parameters:
       Grants read-only access on this side; the bucket's own policy must also
       allow it. Leave empty for none.
   SeqeraExternalId:
-    Type: String
+    Type: CommaDelimitedList
     Default: ""
     NoEcho: true
     Description: >
-      External ID that Seqera generates when you save role-based AWS credentials.
-      Leave empty to skip creating the Seqera role.
+      External ID(s) that Seqera generates for role-based AWS credentials, comma
+      separated. Each workspace gets its own, so list one per workspace that
+      uses this role. Leave empty to skip creating the Seqera role.
 
 Conditions:
-  CreateSeqeraRole: !Not [!Equals [!Ref SeqeraExternalId, ""]]
+  CreateSeqeraRole: !Not [!Equals [!Join ["", !Ref SeqeraExternalId], ""]]
   HasInputBucket: !Not [!Equals [!Ref InputBucket, ""]]
 
 Resources:
@@ -205,7 +206,7 @@ Resources:
       RoleName: atx-fastq2frags-seqera
       # Same layout as the trust policy Seqera shows for role-based credentials.
       # TagSession has no condition, but a session still needs AssumeRole and
-      # so the External ID.
+      # so the External ID. With several IDs, any one of them matches.
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

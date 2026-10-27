@@ -82,9 +82,11 @@ Forge creates its own `TowerForge-*` queues and compute environments, and
 deletes them when you remove the compute environment in Seqera.
 
 1. In Seqera, go to **Credentials → Add → Amazon** and choose **role-based**.
-   In **Assume role**, enter `arn:aws:iam::877829285799:role/atx-fastq2frags-seqera`,
-   then save. Seqera generates an **External ID**. Copy it.
-2. Create the role by redeploying the stack with the External ID:
+   In **Assume role**, enter `arn:aws:iam::877829285799:role/atx-fastq2frags-seqera`.
+   Seqera shows an **External ID**. Copy it, and save the credential after step 2.
+2. Create or update the role with the External ID. Each workspace has its own
+   ID; to use the role from several workspaces, pass them comma separated
+   (`SeqeraExternalId=<id 1>,<id 2>`):
 
    ```bash
    aws cloudformation deploy --stack-name fastq2frags-batch-dev \
@@ -96,16 +98,52 @@ deletes them when you remove the compute environment in Seqera.
 
 3. Go to **Compute environments → Add → AWS Batch → Batch Forge**:
    - Region: `us-east-1`
-   - Work directory: `s3://atx-fastq2frags-dev-877829285799/work/seqera`
-   - Enable Wave and Fusion v2
-   - Provisioning: Spot or on-demand
-   - Max CPUs: 64
-   - Under advanced options, set the VPC and the three subnets above. Leave instance types empty so Seqera picks NVMe types.
-4. Add a GitHub credential, because the repo is private. Also add a container
-   registry credential for ECR, so Wave can pull the private image.
-5. Add the pipeline from `https://github.com/atlasxomics/fastq2frags_nf` and launch
-   with the same parameters as in step 4. Fusion handles S3 staging, so the
-   image's AWS CLI isn't used there.
+   - Work directory: `s3://atx-fastq2frags-dev-877829285799`
+   - Provisioning: on-demand
+   - Max CPUs: 128
+   - Instance types: `m6i, r6i, c6i`
+   - Boot disk size: 2000 GB. A real sample's FILTER_LINKERS needs about 2 TB
+     of scratch (Latch allocates 1.95 TB).
+   - Under advanced options, set the VPC and the three subnets above.
+
+   Fusion v2 with fast instance storage also works (it needs Wave and the
+   `atx-fastq2frags-wave-ecr` registry credential), but in our test it was
+   slower and cost more. With instance types left empty, Batch picked older
+   r5ad instances.
+4. Add a GitHub credential, because the repo is private.
+5. Add the pipeline from `https://github.com/atlasxomics/fastq2frags_nf` to the
+   Launchpad. `nextflow_schema.json` provides the launch form.
+
+## 6. Customer deliveries through Seqera (trial)
+
+Customers get their results through Seqera's Data Explorer. Runs happen in an
+internal workspace and publish to a delivery bucket. Each customer has a
+private workspace whose only credential is a role that can read and write
+their own prefix. Seqera's data-link check fails unless the role can list the
+whole bucket, so customers can see each other's folder names (not files) in a
+shared bucket; use one bucket per customer, or non-identifying IDs, for real
+customers.
+
+| Template | Creates |
+| --- | --- |
+| `deliveries.cfn.yml` (stack `atx-fastq2frags-deliveries`) | `atx-fastq2frags-deliveries-877829285799`: SSE-S3, lifecycle expiry, CORS for Data Explorer, and a bucket policy that lets `TowerForge-*` instance roles publish |
+| `delivery-customer.cfn.yml` (one stack per customer, `atx-delivery-<id>`) | `atx-delivery-<id>-seqera`: lists the delivery bucket; reads and writes only `s3://atx-fastq2frags-deliveries-877829285799/<id>/` (Seqera's documented minimum) |
+
+For each customer:
+
+1. In the customer's workspace, add role-based AWS credentials with
+   `arn:aws:iam::877829285799:role/atx-delivery-<id>-seqera` and copy the External ID.
+2. Deploy `delivery-customer.cfn.yml` with `CustomerId=<id>` and that External ID,
+   then save the credential.
+3. In **Data Explorer**, add the data link `s3://atx-fastq2frags-deliveries-877829285799/<id>/`
+   with that credential.
+4. Invite the customer's users as collaborators with the **View** role.
+5. Launch runs from the internal workspace with
+   `--outdir s3://atx-fastq2frags-deliveries-877829285799/<id>/<run>`.
+
+Keep that role as the only credential in the customer's workspace. Data
+Explorer lists every bucket any workspace credential can read, and hiding a
+data link doesn't block access.
 
 ## Tear down
 

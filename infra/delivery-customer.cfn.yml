@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Seqera role for one customer's delivery prefix,
+  s3://<deliveries bucket>/<CustomerId>/. Deploy one stack per customer
+  (e.g. atx-delivery-acme) and use the role as the only AWS credential in that
+  customer's Seqera workspace. Requires the deliveries.cfn.yml stack.
+
+Parameters:
+  CustomerId:
+    Type: String
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,30}$"
+    Description: Short lowercase customer ID, used as the S3 prefix and in the role name.
+  SeqeraExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: External ID Seqera shows when you add role-based AWS credentials in the customer's workspace.
+
+Resources:
+  CustomerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "atx-delivery-${CustomerId}-seqera"
+      # Same layout as the trust policy Seqera shows for role-based credentials.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref SeqeraExternalId
+          - Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
+            Action: sts:TagSession
+      Policies:
+        - PolicyName: read-own-deliveries
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Seqera calls ListBuckets to validate the credential and refuses
+              # it otherwise. It reveals the account's bucket names, not their
+              # contents.
+              - Sid: ListBucketNames
+                Effect: Allow
+                Action: s3:ListAllMyBuckets
+                Resource: "*"
+              # Seqera's documented minimum on each bucket it browses: list it
+              # and read its region, ACL and policy. Allowed on the delivery
+              # bucket only. Listing isn't limited to the customer's prefix
+              # (a prefix-limited role failed Seqera's data-link check), so
+              # the customer can see other customers' folder names, but not
+              # read their files.
+              - Sid: BucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketAcl
+                  - s3:GetBucketPolicy
+                Resource: !Sub
+                  - "arn:aws:s3:::${Bucket}"
+                  - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
+              # Download and upload (Seqera's documented minimum), on the
+              # customer's own prefix only.
+              - Sid: OwnObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub
+                  - "arn:aws:s3:::${Bucket}/${CustomerId}/*"
+                  - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
+
+Outputs:
+  RoleArn:
+    Description: Paste into the customer workspace's Seqera credential ("Assume role").
+    Value: !GetAtt CustomerRole.Arn
+  DataLink:
+    Description: Add as a data link in the customer's workspace.
+    Value: !Sub
+      - "s3://${Bucket}/${CustomerId}/"
+      - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
