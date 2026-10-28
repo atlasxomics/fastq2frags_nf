@@ -1,22 +1,153 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Seqera role for one customer's delivery prefix,
-  s3://<deliveries bucket>/<CustomerId>/. Deploy one stack per customer
-  (e.g. atx-delivery-acme) and use the role as the only AWS credential in that
-  customer's Seqera workspace. Requires the deliveries.cfn.yml stack.
+  Delivery bucket and Seqera role for one customer. Deploy one stack per
+  customer (e.g. atx-delivery-acme) and use the role as the only AWS credential
+  in that customer's Seqera workspace. Pipeline runs in the internal workspace
+  publish results into the bucket. Dev/test only.
 
 Parameters:
   CustomerId:
     Type: String
     AllowedPattern: "^[a-z0-9][a-z0-9-]{1,30}$"
-    Description: Short lowercase customer ID, used as the S3 prefix and in the role name.
+    Description: Short lowercase customer ID, used in the bucket and role names.
   SeqeraExternalId:
     Type: String
     NoEcho: true
     MinLength: 1
     Description: External ID Seqera shows when you add role-based AWS credentials in the customer's workspace.
+  RetentionDays:
+    Type: Number
+    Default: 30
+    Description: Days to keep delivered results before they are deleted.
+  WriterRolePattern:
+    Type: String
+    Default: arn:aws:iam::*:role/TowerForge-*
+    Description: >
+      ARN pattern of the roles allowed to publish results (the Batch Forge
+      instance roles of the internal workspace). Narrow it to the internal
+      compute environment's role once it exists.
+  InternalViewerRoleName:
+    Type: String
+    Default: atx-fastq2frags-seqera
+    Description: >
+      Role of the internal Seqera workspace's credential, allowed to browse and
+      download from the bucket in Data Explorer. Leave empty to not allow it.
+
+Conditions:
+  AllowInternalViewer: !Not [!Equals [!Ref InternalViewerRoleName, ""]]
 
 Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "atx-delivery-${CustomerId}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-deliveries
+            Status: Enabled
+            ExpirationInDays: !Ref RetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      # Data Explorer downloads several files at once from the browser, which
+      # needs CORS. Read-only, so no PUT.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["https://cloud.seqera.io"]
+            AllowedMethods: [GET, HEAD]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [ETag]
+            MaxAge: 3000
+
+  # A bucket policy that names a role grants it access without any identity
+  # policy, so Forge's instance roles can publish here unchanged. Naming the
+  # account root would only defer to IAM, and Principal can't hold wildcards,
+  # hence "*" limited by account and role ARN. The fixed aws:PrincipalAccount
+  # also keeps S3 from treating the policy as public.
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub "${Bucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: PipelineList
+            Effect: Allow
+            Principal: "*"
+            Action: [s3:ListBucket, s3:GetBucketLocation]
+            Resource: !GetAtt Bucket.Arn
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:PrincipalArn: !Ref WriterRolePattern
+          - Sid: PipelinePublish
+            Effect: Allow
+            Principal: "*"
+            Action: [s3:GetObject, s3:PutObject, s3:AbortMultipartUpload]
+            Resource: !Sub "${Bucket.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:PrincipalArn: !Ref WriterRolePattern
+          - !If
+            - AllowInternalViewer
+            - Sid: InternalBrowse
+              Effect: Allow
+              Principal: "*"
+              Action:
+                - s3:ListBucket
+                - s3:GetBucketLocation
+                - s3:GetBucketAcl
+                - s3:GetBucketPolicy
+                - s3:GetBucketVersioning
+              Resource: !GetAtt Bucket.Arn
+              Condition:
+                StringEquals:
+                  aws:PrincipalAccount: !Ref AWS::AccountId
+                ArnEquals:
+                  aws:PrincipalArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${InternalViewerRoleName}"
+            - !Ref AWS::NoValue
+          - !If
+            - AllowInternalViewer
+            - Sid: InternalDownload
+              Effect: Allow
+              Principal: "*"
+              Action: s3:GetObject
+              Resource: !Sub "${Bucket.Arn}/*"
+              Condition:
+                StringEquals:
+                  aws:PrincipalAccount: !Ref AWS::AccountId
+                ArnEquals:
+                  aws:PrincipalArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/${InternalViewerRoleName}"
+            - !Ref AWS::NoValue
+
   CustomerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -37,7 +168,7 @@ Resources:
               AWS: arn:aws:iam::161471496260:role/SeqeraPlatformCloudAccessRole
             Action: sts:TagSession
       Policies:
-        - PolicyName: read-own-deliveries
+        - PolicyName: own-delivery-bucket
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -48,12 +179,8 @@ Resources:
                 Effect: Allow
                 Action: s3:ListAllMyBuckets
                 Resource: "*"
-              # Seqera's documented minimum on each bucket it browses: list it
-              # and read its region, ACL and policy. Allowed on the delivery
-              # bucket only. Listing isn't limited to the customer's prefix
-              # (a prefix-limited role failed Seqera's data-link check), so
-              # the customer can see other customers' folder names, but not
-              # read their files.
+              # Seqera's documented minimum on each bucket it browses, plus
+              # GetBucketVersioning, which Data Explorer also calls.
               - Sid: BucketAccess
                 Effect: Allow
                 Action:
@@ -61,24 +188,23 @@ Resources:
                   - s3:GetBucketLocation
                   - s3:GetBucketAcl
                   - s3:GetBucketPolicy
-                Resource: !Sub
-                  - "arn:aws:s3:::${Bucket}"
-                  - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
-              # Download and upload (Seqera's documented minimum), on the
-              # customer's own prefix only.
-              - Sid: OwnObjects
+                  - s3:GetBucketVersioning
+                Resource: !GetAtt Bucket.Arn
+              # Download and upload (Seqera's documented minimum).
+              - Sid: Objects
                 Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
-                Resource: !Sub
-                  - "arn:aws:s3:::${Bucket}/${CustomerId}/*"
-                  - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
+                Resource: !Sub "${Bucket.Arn}/*"
 
 Outputs:
+  BucketName:
+    Value: !Ref Bucket
   RoleArn:
     Description: Paste into the customer workspace's Seqera credential ("Assume role").
     Value: !GetAtt CustomerRole.Arn
   DataLink:
-    Description: Add as a data link in the customer's workspace.
-    Value: !Sub
-      - "s3://${Bucket}/${CustomerId}/"
-      - Bucket: !ImportValue atx-fastq2frags-deliveries-bucket
+    Description: Data Explorer finds this bucket itself; add it as a data link if it doesn't.
+    Value: !Sub "s3://${Bucket}"
+  OutDir:
+    Description: --outdir for runs delivered to this customer (add a run name).
+    Value: !Sub "s3://${Bucket}/<run>"

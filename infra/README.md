@@ -117,17 +117,23 @@ deletes them when you remove the compute environment in Seqera.
 ## 6. Customer deliveries through Seqera (trial)
 
 Customers get their results through Seqera's Data Explorer. Runs happen in an
-internal workspace and publish to a delivery bucket. Each customer has a
-private workspace whose only credential is a role that can read and write
-their own prefix. Seqera's data-link check fails unless the role can list the
-whole bucket, so customers can see each other's folder names (not files) in a
-shared bucket; use one bucket per customer, or non-identifying IDs, for real
-customers.
+internal workspace and publish to a delivery bucket per customer. Each customer
+has a private workspace whose only credential is a role for their own bucket.
 
-| Template | Creates |
-| --- | --- |
-| `deliveries.cfn.yml` (stack `atx-fastq2frags-deliveries`) | `atx-fastq2frags-deliveries-877829285799`: SSE-S3, lifecycle expiry, CORS for Data Explorer, and a bucket policy that lets `TowerForge-*` instance roles publish |
-| `delivery-customer.cfn.yml` (one stack per customer, `atx-delivery-<id>`) | `atx-delivery-<id>-seqera`: lists the delivery bucket; reads and writes only `s3://atx-fastq2frags-deliveries-877829285799/<id>/` (Seqera's documented minimum) |
+`delivery-customer.cfn.yml` (one stack per customer, `atx-delivery-<id>`) creates:
+
+- `atx-delivery-<id>-877829285799`: SSE-S3, lifecycle expiry, CORS for Data
+  Explorer, and a bucket policy that lets `TowerForge-*` instance roles publish
+  and the internal workspace's credential (`atx-fastq2frags-seqera`) browse.
+- `atx-delivery-<id>-seqera`: Seqera's documented minimum on that bucket only
+  (list, read, upload), plus `s3:ListAllMyBuckets`, which Seqera needs to
+  validate the credential.
+
+A bucket per customer, rather than a prefix per customer in a shared bucket,
+because Seqera's data-link check fails unless the role can list the whole
+bucket, which would show customers each other's folder names.
+`ListAllMyBuckets` still lets the role see other buckets' names (not contents);
+Data Explorer only shows customers the buckets they can open.
 
 For each customer:
 
@@ -135,15 +141,18 @@ For each customer:
    `arn:aws:iam::877829285799:role/atx-delivery-<id>-seqera` and copy the External ID.
 2. Deploy `delivery-customer.cfn.yml` with `CustomerId=<id>` and that External ID,
    then save the credential.
-3. In **Data Explorer**, add the data link `s3://atx-fastq2frags-deliveries-877829285799/<id>/`
-   with that credential.
+3. In **Data Explorer**, check that `s3://atx-delivery-<id>-877829285799` is
+   listed (add it as a data link with that credential if not).
 4. Invite the customer's users as collaborators with the **View** role.
 5. Launch runs from the internal workspace with
-   `--outdir s3://atx-fastq2frags-deliveries-877829285799/<id>/<run>`.
+   `--outdir s3://atx-delivery-<id>-877829285799/<run>`.
 
 Keep that role as the only credential in the customer's workspace. Data
 Explorer lists every bucket any workspace credential can read, and hiding a
 data link doesn't block access.
+
+Buckets are kept when a stack is deleted (`DeletionPolicy: Retain`); empty and
+delete them in S3.
 
 ## Tear down
 
