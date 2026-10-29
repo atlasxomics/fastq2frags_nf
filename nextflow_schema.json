@@ -162,7 +162,7 @@
                 "container": {
                     "type": "string",
                     "description": "Container image for all processes. Defaults to atx-fastq2frags:<version>.",
-                    "help_text": "On AWS Batch, use the ECR image, e.g. 877829285799.dkr.ecr.us-east-1.amazonaws.com/atx-fastq2frags:0.0.1. Use the -local tag with the test profile.",
+                    "help_text": "On AWS Batch, use your ECR image: <account-id>.dkr.ecr.<region>.amazonaws.com/atx-fastq2frags:<version>. Replace the placeholders with your deployment values. Use the -local tag with the test profile.",
                     "fa_icon": "fab fa-docker"
                 },
                 "publish_dir_mode": {

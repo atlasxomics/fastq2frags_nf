@@ -31,7 +31,7 @@ Parameters:
     Type: String
     Default: ""
     Description: >
-      Optional bucket in another account to read inputs from (e.g. atx-illumina).
+      Optional bucket in another account to read inputs from.
       Grants read-only access on this side; the bucket's own policy must also
       allow it. Leave empty for none.
   SeqeraExternalId:

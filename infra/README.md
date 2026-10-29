@@ -14,8 +14,20 @@ running the test data and a few small samples. It isn't meant for production.
 The compute environment scales to zero when nothing is queued, so it costs
 nothing at idle. You pay for the bucket and for instances only while jobs run.
 
-The commands below assume a shell with admin credentials for the target
-account (aws-nonprod, 877829285799) in us-east-1.
+Run these commands from the repository root with deployment permissions in
+your target AWS account and the AWS CLI region set to `us-east-1`. Verify the
+account before deploying, and replace the network placeholders below:
+
+```bash
+aws sts get-caller-identity
+DEPLOY_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+DEPLOY_VPC_ID='<your-vpc-id>'
+DEPLOY_SUBNET_IDS='<subnet-id-1>,<subnet-id-2>,<subnet-id-3>'
+```
+
+Use the same shell for the following commands. In Seqera UI examples, replace
+`<account-id>` with `DEPLOY_ACCOUNT_ID`'s value. Keep your actual network IDs,
+customer mappings, and deployment notes in a private operations runbook.
 
 ## 1. Publish the container
 
@@ -33,19 +45,20 @@ aws cloudformation deploy \
   --template-file infra/aws-batch-dev.cfn.yml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-      VpcId=vpc-02bce72d54b5c7bdf \
-      SubnetIds=subnet-09122eeb006650918,subnet-03d2d742a6c58cde2,subnet-04858255ddcdf44c6
+      VpcId="$DEPLOY_VPC_ID" \
+      SubnetIds="$DEPLOY_SUBNET_IDS"
 ```
 
-These are the public subnets of aws-nonprod's Control Tower VPC. The account
-has no NAT gateway, so instances reach ECR and the internet through public IPs.
-They have no inbound access. S3 traffic goes through the VPC's gateway endpoint.
+Choose subnets with outbound access to ECR and the public test files: public
+subnets that assign public IPs, or private subnets with a NAT gateway. The
+template's security group has no inbound rules. An S3 gateway endpoint can
+provide a private route to S3.
 
 ## 3. Upload the test data
 
 ```bash
-B=atx-fastq2frags-dev-877829285799
-aws s3 sync tests/test_data/ s3://$B/test-data/ --exclude samplesheet.csv
+B="atx-fastq2frags-dev-${DEPLOY_ACCOUNT_ID}"
+aws s3 sync test_data/ s3://$B/test-data/ --exclude samplesheet.csv
 cat > /tmp/samplesheet.s3.csv <<EOF
 run_id,r1,r2,ng_id,ds_table
 demo,s3://$B/test-data/demo_R1.fastq.gz,s3://$B/test-data/demo_R2.fastq.gz,,
@@ -60,8 +73,8 @@ Nextflow runs locally and submits each task to Batch. The laptop has to stay
 online until the run finishes.
 
 ```bash
-B=atx-fastq2frags-dev-877829285799
-IMG=877829285799.dkr.ecr.us-east-1.amazonaws.com/atx-fastq2frags:$(cat version)-local
+B="atx-fastq2frags-dev-${DEPLOY_ACCOUNT_ID}"
+IMG="${DEPLOY_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/atx-fastq2frags:$(cat version)-local"
 
 nextflow run main.nf -profile awsbatch,test \
     -w s3://$B/work \
@@ -82,7 +95,7 @@ Forge creates its own `TowerForge-*` queues and compute environments, and
 deletes them when you remove the compute environment in Seqera.
 
 1. In Seqera, go to **Credentials → Add → Amazon** and choose **role-based**.
-   In **Assume role**, enter `arn:aws:iam::877829285799:role/atx-fastq2frags-seqera`.
+   In **Assume role**, enter `arn:aws:iam::<account-id>:role/atx-fastq2frags-seqera`.
    Seqera shows an **External ID**. Copy it, and save the credential after step 2.
 2. Create or update the role with the External ID. Each workspace has its own
    ID; to use the role from several workspaces, pass them comma separated
@@ -91,26 +104,25 @@ deletes them when you remove the compute environment in Seqera.
    ```bash
    aws cloudformation deploy --stack-name fastq2frags-batch-dev \
      --template-file infra/aws-batch-dev.cfn.yml --capabilities CAPABILITY_NAMED_IAM \
-     --parameter-overrides SeqeraExternalId=<external id> \
-         VpcId=vpc-02bce72d54b5c7bdf \
-         SubnetIds=subnet-09122eeb006650918,subnet-03d2d742a6c58cde2,subnet-04858255ddcdf44c6
+     --parameter-overrides SeqeraExternalId='<external-id>' \
+         VpcId="$DEPLOY_VPC_ID" \
+         SubnetIds="$DEPLOY_SUBNET_IDS"
    ```
 
 3. Go to **Compute environments → Add → AWS Batch → Batch Forge**:
    - Region: `us-east-1`
-   - Work directory: `s3://atx-fastq2frags-dev-877829285799`
+   - Work directory: `s3://atx-fastq2frags-dev-<account-id>`
    - Provisioning: on-demand
    - Max CPUs: 128
    - Instance types: `m6i, r6i, c6i`
-   - Boot disk size: 2000 GB. A real sample's FILTER_LINKERS needs about 2 TB
-     of scratch (Latch allocates 1.95 TB).
-   - Under advanced options, set the VPC and the three subnets above.
+   - Boot disk size: 2000 GB as a starting point for large samples; adjust to
+     the scratch space required by FILTER_LINKERS.
+   - Under advanced options, set your VPC and subnets.
 
-   Fusion v2 with fast instance storage also works (it needs Wave and the
-   `atx-fastq2frags-wave-ecr` registry credential), but in our test it was
-   slower and cost more. With instance types left empty, Batch picked older
-   r5ad instances.
-4. Add a GitHub credential, because the repo is private.
+   Fusion v2 with fast instance storage is another option. It needs Wave and
+   the `atx-fastq2frags-wave-ecr` registry credential. Benchmark performance
+   and cost with your workload before choosing a configuration.
+4. Add a GitHub credential if using a private repository or fork.
 5. Add the pipeline from `https://github.com/atlasxomics/fastq2frags_nf` to the
    Launchpad. `nextflow_schema.json` provides the launch form.
 
@@ -122,7 +134,7 @@ has a private workspace whose only credential is a role for their own bucket.
 
 `delivery-customer.cfn.yml` (one stack per customer, `atx-delivery-<id>`) creates:
 
-- `atx-delivery-<id>-877829285799`: SSE-S3, lifecycle expiry, CORS for Data
+- `atx-delivery-<id>-<account-id>`: SSE-S3, lifecycle expiry, CORS for Data
   Explorer, and a bucket policy that lets `TowerForge-*` instance roles publish
   and the internal workspace's credential (`atx-fastq2frags-seqera`) browse.
 - `atx-delivery-<id>-seqera`: Seqera's documented minimum on that bucket only
@@ -138,14 +150,14 @@ Data Explorer only shows customers the buckets they can open.
 For each customer:
 
 1. In the customer's workspace, add role-based AWS credentials with
-   `arn:aws:iam::877829285799:role/atx-delivery-<id>-seqera` and copy the External ID.
+   `arn:aws:iam::<account-id>:role/atx-delivery-<id>-seqera` and copy the External ID.
 2. Deploy `delivery-customer.cfn.yml` with `CustomerId=<id>` and that External ID,
    then save the credential.
-3. In **Data Explorer**, check that `s3://atx-delivery-<id>-877829285799` is
+3. In **Data Explorer**, check that `s3://atx-delivery-<id>-<account-id>` is
    listed (add it as a data link with that credential if not).
 4. Invite the customer's users as collaborators with the **View** role.
 5. Launch runs from the internal workspace with
-   `--outdir s3://atx-delivery-<id>-877829285799/<run>`.
+   `--outdir s3://atx-delivery-<id>-<account-id>/<run>`.
 
 Keep that role as the only credential in the customer's workspace. Data
 Explorer lists every bucket any workspace credential can read, and hiding a
