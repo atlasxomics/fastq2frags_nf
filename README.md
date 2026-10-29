@@ -50,10 +50,25 @@ file publishes two images:
 | `<version>` | Release image, for real runs. |
 | `<version>-local` | Chromap sort buffer cut to 1 GiB, for local tests only. |
 
+Before creating a release, update `version` to the new version number (without
+the `v` prefix) and commit it. Choose a version whose Git tag does not already
+exist, then tag that commit:
+
 ```bash
+# Edit version first, then:
+git add version
+git commit -m "Bump version to $(cat version)"
+git push origin HEAD
 git tag "v$(cat version)"
 git push origin "v$(cat version)"
 ```
+
+If creating the release in GitHub, push the version commit first and create the
+matching `vX.Y.Z` tag from that commit. The workflow checks the `version` file
+at the tagged commit. A mismatch fails before either image is built. Updating
+the branch and rerunning the failed job does not change the existing tag;
+publish a new version with a matching version commit and tag, or deliberately
+replace the failed release's tag after checking that nobody depends on it.
 
 Running the workflow by hand from the Actions tab publishes
 `<version>-<short sha>` and `<version>-<short sha>-local` instead, so release

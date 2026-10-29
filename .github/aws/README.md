@@ -50,7 +50,17 @@ from `us-east-1` / `atx-fastq2frags`.
 
 ## 3. Publish
 
+Update the root `version` file (without a `v` prefix), commit it, and push that
+commit before creating the matching release tag. Use a new, unused version:
+
 ```bash
+git add version
+git commit -m "Bump version to $(cat version)"
+git push origin HEAD
 git tag "v$(cat version)"
 git push origin "v$(cat version)"
 ```
+
+The version file must match at the tagged commit. See the
+[release instructions](../../README.md#published-images-ecr) for recovery from
+a tag/version mismatch.
