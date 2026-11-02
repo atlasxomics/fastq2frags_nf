@@ -14,6 +14,12 @@ from typing import Optional, Dict
 
 import tss_norm
 
+# snapatac2 saves its plots through kaleido, which drives a headless Chromium.
+# Under gVisor (Carolina Cloud pool workers) that Chromium can hang without
+# exiting; running it as a single process avoids this (Carolina's fix).
+import plotly.io as pio
+pio.kaleido.scope.chromium_args += ("--single-process",)
+
 # globals Defs
 # change to accomodate pipeline norms
 frag_genome_dict = {
